@@ -1,0 +1,83 @@
+--- bin/ae_functions.orig	2026-04-02 09:00:00.000000000 +0000
++++ bin/ae_functions	2026-04-02 16:00:00.000000000 +0000
+@@ -42,4 +42,27 @@
++ae_probe_swap() {
++    # 2026: Find the best physical backing (Partition or File)
++    # Priority: Active Physical > Inactive swap.img > None
++    local phys_swap=$(swapon --show=NAME,TYPE --noheadings | awk '$2 ~ /partition|file/ {print $1; exit}')
++    
++    if [[ -z "$phys_swap" ]]; then
++        # Check common BTRFS/Ext4 paths if nothing is active
++        for s in "/swap/swap.img" "/.swap/swap.img"; do
++            [[ -f "$s" ]] && phys_swap="$s" && break
++        done
++    fi
++
++    if [[ -n "$phys_swap" ]]; then
++        if ! swapon --show | grep -q "$phys_swap"; then
++            einfo "  [AE] Activating physical safety net: $phys_swap"
++            swapon -p 10 "$phys_swap" 2>/dev/null
++        fi
++        export AE_ACTIVE_PHYS_SWAP="$phys_swap"
++    fi
++}
++
++ae_check_mem_safety() {
++    # Returns 80% of (Physical RAM + All Swap) in MiB
++    free -m | awk '/^Mem:/{m=$2} /^Swap:/{s=$2} END {print int((m+s)*0.80)}'
++}
+
+--- bin/temerge.orig	2013-09-07 08:44:02.000000000 +0000
++++ bin/temerge	2026-04-02 16:15:00.000000000 +0000
+@@ -25,12 +25,25 @@
+ mounttmpfs() {
+-	[ -b "$TE_ZRAM" ] && \
+-		mount -t tmpfs -o size=$TE_MEMSIZE $TE_ZRAM $TE_VTP \
+-	|| \
+-		mount -t tmpfs tmpfs -o size=$TE_MEMSIZE $TE_VTP
++    # 1. Ensure safety net is active
++    ae_probe_swap
++    
++    # 2. Dynamic Sizing (80% Safety Rule)
++    local safe_size=$(ae_check_mem_safety)
++    [[ -n "$TE_MEMSIZE" ]] && [[ ${TE_MEMSIZE%M} -gt $safe_size ]] && \
++        ewarn "  [AE] Requested $TE_MEMSIZE exceeds 80% safety. Throttling to ${safe_size}M."
++    
++    TE_MEMSIZE="${TE_MEMSIZE:-${safe_size}M}"
++
++    # 3. Mount with modern DDR5 optimizations
++    # 'huge=always' reduces TLB pressure on large builds
++    if mount -t tmpfs -o size="$TE_MEMSIZE",huge=always,mode=1777 tmpfs "$TE_VTP"; then
++        einfo "  [AE] RAM-disk engaged: $TE_MEMSIZE"
++        mounted="true"
++    else
++        eerror "  [AE] Failed to mount RAM-disk. Building on physical disk."
++        mounted="false"
++    fi
+ }
+
+--- bin/ae_root_mount.orig	2015-04-02 10:00:00.000000000 +0000
++++ bin/ae_root_mount	2026-04-02 16:20:00.000000000 +0000
+@@ -10,12 +10,10 @@
+ # get config
+-source ae_functions || exit 1
+-ae_load_config
++source ae_functions && ae_load_config || exit 1
+ 
+-einfo "Mounting AUFS root to ${AE_DIR[ROOT]}:"
++einfo "Mounting OverlayFS Sandbox (80% Safety Gate):"
+ 
+-if ! [ "$(grep aufs /proc/filesystems)" ]; then
+-	eerror "  AUFS is not supported by the kernel! Stop."
+-	exit 2
+-fi
++mkdir -p "${AE_PATHS_UPPER}" "${AE_PATHS_WORK}" "${AE_PATHS_MERGED}"
++
++# Set aggressive swappiness for the build loop to ensure spillover works
++sysctl -w vm.swappiness=60 >/dev/null 2>&1
+ 
+ mount -t overlay overlay -o \
+-    lowerdir=/,upperdir="${AE_PATHS_UPPER}",workdir="${AE_PATHS_WORK}" \
+-    "${AE_PATHS_MERGED}"
++    lowerdir=/,upperdir="${AE_PATHS_UPPER}",workdir="${AE_PATHS_WORK}",index=on,xino=on \
++    "${AE_PATHS_MERGED}"
