@@ -1,0 +1,39 @@
+--- bin/ae_sync.orig	2011-04-02 12:00:00.000000000 +0000
++++ bin/ae_sync	2026-04-02 08:20:00.000000000 +0000
+@@ -15,10 +15,31 @@
+ 	# -X preserves extended attributes (important for Gentoo metadata/capabilities)
+ 	# --checksum ensures we only copy truly changed files
+ 	rsync -aHAX --checksum \
+-		--exclude='/.aufs.xino' --exclude='/.work' \
++		--exclude='/.aufs.xino' --exclude='/.work' --exclude='*.work' \
+ 		"${AE_DIR[RW]}/" "${AE_DIR[ROOT]}/" || die "rsync failed"
+ 
+-	# Handle Whiteouts (Aufs style)
++	einfo "Processing filesystem whiteouts..."
++
++	# 1. Handle OverlayFS whiteouts (character devices with 0/0 major/minor)
++	# These represent files deleted inside the OverlayFS sandbox.
++	find "${AE_DIR[RW]}" -type c -print0 2>/dev/null | while IFS= read -r -d '' wo; do
++		local rel_path="${wo#${AE_DIR[RW]}}"
++		local target="${AE_DIR[ROOT]}${rel_path}"
++		if [[ -e "$target" || -L "$target" ]]; then
++			rm -rf "$target"
++			einfo "  Removed (OverlayFS whiteout): $rel_path"
++		fi
++	done
++
++	# 2. Handle AUFS whiteouts (.wh. files)
+ 	find "${AE_DIR[RW]}" -name '.wh.*' -print0 2>/dev/null | while IFS= read -r -d '' wo; do
+-		# Original logic to remove .wh. markers and their real-root counterparts
++		local base=$(basename "$wo")
++		local dir=$(dirname "$wo")
++		local rel_dir="${dir#${AE_DIR[RW]}}"
++		
++		if [[ "$base" != ".wh..wh..opq" ]]; then
++			local real_name="${base#.wh.}"
++			local target="${AE_DIR[ROOT]}${rel_dir}/${real_name}"
++			[[ -e "$target" || -L "$target" ]] && rm -rf "$target"
++		fi
++		# Clean up the whiteout marker itself from the real root if rsync moved it
++		rm -f "${AE_DIR[ROOT]}${rel_dir}/${base}" 2>/dev/null
+ 	done
