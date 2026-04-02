@@ -1,0 +1,88 @@
+--- bin/ae_makeworld.orig	2013-04-02 10:30:00.000000000 +0000
++++ bin/ae_makeworld	2026-04-02 11:15:00.000000000 +0000
+@@ -280,48 +280,31 @@
+ # scan and return to $sysvers versions of major system stuff
+ # scan_for_sysvers: ---
+ scan_for_sysvers() { 
+-	local s sens pkg dtc iver uver eig
++	local sens pkg iver uver
+ 	sysvers=''
+ 	
+-	# get versions with 'emerge --info' detector if required
+-	for ((s=0; s<${AE_SUPD[TOTAL]}; s++)); do 					
+-		for sens in ${AE_SUPD[${s}_SENSOR]}; do 
+-			[[ "-${AE_SUPD[${s}_DETECTOR]}-" == "-ei-" ]] && {
+-				[ "$eig" ] && eig+="\n"
+-				eig+="^${sens}:"
+-			}
+-		done
+-	done
++	einfo "    Scanning system versions for sensors..."
+ 
+-	# get from emerge --info $eig list of packages
+-	[ "$eig" ] && sysvers=$(emerge --info | grep -f <(echo -e $eig))"\n"
+-	
+-	# get more versions with other detectors
+-	for ((s=0; s<${AE_SUPD[TOTAL]}; s++)); do
+-		# switch detector
+-		dtc="-${AE_SUPD[${s}_DETECTOR]}-"
+-		case $dtc in
+-			-ei-) ;;
+-			-eixc-|-pre-eixc-) 
+-					for sens in ${AE_SUPD[${s}_SENSOR]}; do
+-						pkg=$(eix '-I*' -e --format '<category>/<name>' $sens)
+-						if [ "$pkg" ]; then
+-							sysvers+="$pkg:\t"
+-							iver=$(eix '-I*' -e --format '<installedversions:NAMEVERSION>' $sens)
+-							# extract package version
+-							iver=${iver##*[A-z+_]-}
+-							sysvers+="$iver"
+-							if [[ "$dtc" == "-pre-eixc-" ]]; then
+-								uver=$(eix '-I*' -e --format '<bestversion:NAMEVERSION>' $sens)
+-								# extract package version
+-								uver=${uver##*[A-z+_]-}
+-								#uver=$(eix '-I*' -e --format '<bestslotupgradeversions:VERSION>' $sens)
+-								#"$uver" || uver=$(eix '-I*' -e --format '<bestversion:VERSION>' $sens)
+-								[[ "$iver" == "$uver" ]] || {
+-									sysvers+=" -> $uver"
+-									# set mark for critical packages update (=> world rebuild)
+-									loopLogic_set _CRITICAL_UPDATE
+-									AE_SUPD[${s}_CRITICAL_CHANGE]=1									
+-									#AE_SUPD[${s}_PENDED]=''
+-								}
+-							fi
+-						else
+-							sysvers+="$sens:\t-- not installed --"
+-							AE_SUPD[${s}_NOTINSTALLED]=1
+-						fi
+-						sysvers+="\n"
+-					done
+-					;;
+-			*) echo "Invalid version detectors method: '${AE_SUPD[${s}_DETECTOR]}'!"
+-		esac
+-	done
++	# 2026 logic: Iterate through TOML-defined sensors
++	# Assumes AE_SENSORS_LIST="sys-devel/gcc sys-libs/glibc" from TOML
++	for sens in ${AE_SENSORS_LIST}; do
++		# Use qlist for instant lookup of installed version
++		iver=$(qlist -Iv "$sens" | cut -d: -f2)
++		
++		if [[ -n "$iver" ]]; then
++			sysvers+="${sens}:\t${iver}"
++			
++			# Check for available updates using eix (if installed)
++			if command -v eix >/dev/null; then
++				uver=$(eix -c --pure-packages -e "$sens" --format '<bestversion:NAMEVERSION>')
++				if [[ -n "$uver" && "$iver" != "$uver" ]]; then
++					sysvers+=" -> ${uver}"
++					loopLogic_set _CRITICAL_UPDATE
++				fi
++			fi
++			sysvers+="\n"
++		else
++			sysvers+="${sens}:\t-- not installed --\n"
++		fi
++	done
+ 	
+ 	return 0
+ }
