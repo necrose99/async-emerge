@@ -1,0 +1,64 @@
+--- bin/ae_add_task.orig	2011-04-02 12:00:00.000000000 +0000
++++ bin/ae_add_task	2026-04-02 11:45:00.000000000 +0000
+@@ -10,13 +10,16 @@
+ # 	- Add cmd OR PM params to to-do file in VCS or GRS
+ 
+ # get config
+-. /etc/async.emerge.conf
++source ae_functions || exit 1
++ae_load_config || die "TOML config missing"
+ 
+ # compose to-do filenames
+-fileI="${AE_DIR[REBUILD_VAR]}${AE_RCMD[INSTALL_FILE_PREFIX]}${AE_TASK[FILE_LIST]}"
+-fileC="${AE_DIR[REBUILD_VAR]}${AE_RCMD[COOK_FILE_PREFIX]}${AE_TASK[FILE_LIST]}"
++# 2026: Using AE_PATHS_UPPER as the base for task persistence
++TASK_FILE="tasks.list"
++fileI="${AE_PATHS_UPPER}/install_${TASK_FILE}"
++fileC="${AE_PATHS_UPPER}/cook_${TASK_FILE}"
++LOGIC_FILE="${AE_PATHS_UPPER}/loop_logic"
+ 
+ # check alone key
+ if [ "$1" == "-grs" ]; then
+@@ -24,10 +27,7 @@
+ 	addTo="$fileI"
+ 	addToGRS=1
+ 	shift
+-	fileLL="${AE_DIR[REBUILD_VAR]}.${AE_RCMD[INSTALL_FILE_PREFIX]}${AE_SIGN[RBLOOP_LOGIC]}"
+ else
+ 	addTo="$fileC"
+-	fileLL="${AE_DIR[REBUILD_VAR]}.${AE_RCMD[COOK_FILE_PREFIX]}${AE_SIGN[RBLOOP_LOGIC]}"
+ fi
+ 
+ # check if params exist
+@@ -37,13 +37,11 @@
+ 		ebegin "Adding user tasks" 
+ 
+-	# join params to 1 line
+-	for s in ${*}; do
+-		s=${s/\\\*/*}
+-		o="$o$s "
+-	done
+-	o=${o% }
++	# 2026: Use modern bash array joining
++	o="$*"
++	o="${o//\\\*/*}"
+ 
+ 	# add to preselected file
+ 	if [[ "$o" == \#* ]]; then
+@@ -62,11 +60,9 @@
+ 	einfo "  Total tasks to do in GRS $cntI:"
+ 	[ -e "$fileI" ] && cat "$fileI"
+ 	
+-	einfo "  Set 'user task bit' in loopLogic file."
+-	# save ts
+-	llTS=$(stat -c '%Y' "$fileLL")
+-	# convert ts
+-	llTS=$(date -d @${llTS} +'%d %b %Y %R')
+-	# update loopLogic &= 0x20 (user_task)
+-	echo $(($(cat "$fileLL" 2>/dev/null && echo '|' )0x20)) > "$fileLL"
+-	# restore old ts
+-	touch -d "${llTS}" "$fileLL"
++	# 2026: Use the helper from ae_functions instead of manual bit manipulation
++	einfo "  Flagging loop for User Tasks..."
++	loopLogic_set USER_TASKS
+ 	eend $?
