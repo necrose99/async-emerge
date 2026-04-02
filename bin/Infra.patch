@@ -1,0 +1,80 @@
+--- bin/ae_root_mount.orig	2015-04-02 10:00:00.000000000 +0000
++++ bin/ae_root_mount	2026-04-02 12:00:00.000000000 +0000
+@@ -14,14 +14,15 @@
+ #	- config-excluded dirs not mounts and recreates empty
+ 
+ # get config
+-. /etc/async.emerge.conf
++source ae_functions || exit 1
++ae_load_config
+ 
+-einfo "Mounting AUFS root to ${AE_DIR[ROOT]}:"
++einfo "Mounting OverlayFS root to ${AE_PATHS_MERGED}:"
+ 
+-if ! [ "$(grep aufs /proc/filesystems)" ]; then
+-	eerror "  AUFS is not supported by the kernel! Please add AUFS support to kernel. Stop."
+-	eend 2
+-	exit 2
++if ! grep -q "overlay" /proc/filesystems; then
++	eerror "  OverlayFS is not supported by the kernel! Required for 2026 . Stop."
++	eend 1
++	exit 1
+ fi
+ 
+-# check if aufs-root is already mounted
+-if [ "$(mount | grep ${AE_DIR[ROOT]} | grep aufs)" ]; then
+-	ewarn "  AUFS-root is already mounted! Skipping mounting /+/var."
+-	eend 0
+-	exit 0
+-fi
++mkdir -p "${AE_PATHS_UPPER}" "${AE_PATHS_WORK}" "${AE_PATHS_MERGED}"
+ 
+-# (re)create AE gw dir, logs dirs should exist (ebuild creates it)
+-mkdir -p "${AE_DIR[GATEWAY]}" 2>/dev/null
+-
+-# clean mtab
+-if [ -e "${AE_DIR[DELTA]}/etc/mtab" ]; then
+-	rm "${AE_DIR[DELTA]}/etc/mtab" &> /dev/null
+-	einfo "  ${AE_DIR[DELTA]}/etc/mtab unlinked."
+-	eend 0
+-fi
++mount -t overlay overlay -o \
++    lowerdir=/,upperdir="${AE_PATHS_UPPER}",workdir="${AE_PATHS_WORK}" \
++    "${AE_PATHS_MERGED}"
++eend $?
+ 
+ --- bin/ae_delta_cleanup.orig	2011-04-02 11:00:00.000000000 +0000
+ +++ bin/ae_delta_cleanup	2026-04-02 12:05:00.000000000 +0000
+@@ -12,17 +12,18 @@
+ # 	- clean up ${AE_DIR[DELTA]}
+ 
+ # get config
+-. /etc/async.emerge.conf
++source ae_functions || exit 1
++ae_load_config
+ 
+-[[ "${AE_DIR[DELTA]}" == "" || "${AE_DIR[DELTA]}" == "/" ]] && {
+-	eerror "'$PNAME' misconfigured: GRS corruption is possible! Stop."	
++[[ -z "${AE_PATHS_UPPER}" || "${AE_PATHS_UPPER}" == "/" ]] && {
++	eerror "Configuration error: UPPER path is dangerous! Stop."	
+ 	eend 1; exit 1
+ }
+ 
+-ebegin "Clearing ${AE_DIR[DELTA]}"
++ebegin "Clearing Build Delta: ${AE_PATHS_UPPER}"
+ 
+-# check if aufs is mounted
+-if [ "$(mount | grep ${AE_DIR[ROOT]} | grep aufs)" ]; then
+-	eerror "  AUFS is mounted! Stop."
++# check if merged view is still active
++if mountpoint -q "${AE_PATHS_MERGED}"; then
++	eerror "  Filesystem is still mounted! Unmount first."
+ 	eend 1
+ 	exit 1
+ fi
+ 
+-rm -fv "${AE_SIGN[SYNCED]}" &> /dev/null
+-rm -rfv "${AE_DIR[DELTA]}" &> /dev/null
++rm -rf "${AE_PATHS_UPPER}/"* "${AE_PATHS_WORK}/"*
+ 
+ eend $?
