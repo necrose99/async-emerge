@@ -1,0 +1,61 @@
+--- bin/ae_root_mount	2011-04-02 12:00:00.000000000 +0000
++++ bin/ae_root_mount	2026-04-02 08:15:00.000000000 +0000
+@@ -7,16 +7,43 @@
+ # get config
+ . /etc/async.emerge.conf
+ 
++# Kernel detection for modern options
++KVER_MAJ=$(uname -r | cut -d. -f1)
++KVER_MIN=$(uname -r | cut -d. -f2)
++
+ _ae_root_mount() {
+-	# Legacy aufs mount (dirs= is deprecated/removed in aufs6)
+-	mount -t aufs -o "dirs=${AE_DIR[RW]}=rw:${AE_DIR[ROOT]}=ro" aufs "${AE_DIR[CHROOT]}"
+-	
+-	if [ $? -ne 0 ]; then
+-		# Try modern aufs6 syntax (br: instead of dirs=)
+-		mount -t aufs -o "br:${AE_DIR[RW]}=rw:${AE_DIR[ROOT]}=ro,si=ae$$,nohino" aufs "${AE_DIR[CHROOT]}"
+-	fi
++	# 1. AUFS Strategy (Modern br: syntax for 6.x/7.x)
++	if grep -q 'aufs' /proc/filesystems || modprobe aufs 2>/dev/null; then
++		local A_OPTS="br:${AE_DIR[RW]}=rw:${AE_DIR[ROOT]}=ro,si=ae$$,verbose=0"
++		[[ $KVER_MAJ -ge 6 ]] && A_OPTS+=",nohino"
++		[[ $KVER_MAJ -eq 6 && $KVER_MIN -ge 6 ]] && A_OPTS+=",udba=notify"
++
++		if mount -t aufs -o "$A_OPTS" async-aufs "${AE_DIR[CHROOT]}"; then
++			einfo "  Mounted AUFS (Kernel $KVER_MAJ.$KVER_MIN)"
++			return 0
++		fi
++	fi
++
++	# 2. OverlayFS Fallback (Standard in vanilla kernels)
++	if grep -qE '\boverlay(fs)?\b' /proc/filesystems || modprobe overlay 2>/dev/null; then
++		local OVL_WORK="${AE_DIR[RW]}.work"
++		mkdir -p "$OVL_WORK"
++		local O_OPTS="lowerdir=${AE_DIR[ROOT]},upperdir=${AE_DIR[RW]},workdir=$OVL_WORK"
++		
++		# Modern OverlayFS hardening
++		[[ $KVER_MAJ -ge 4 ]] && O_OPTS+=",redirect_dir=off"
++		[[ $KVER_MAJ -ge 5 ]] && O_OPTS+=",xino=off,volatile"
++		[[ $KVER_MAJ -ge 6 ]] && O_OPTS+=",uuid=off"
++
++		if mount -t overlay -o "$O_OPTS" async-ovl "${AE_DIR[CHROOT]}"; then
++			einfo "  Mounted OverlayFS Fallback"
++			return 0
++		fi
++	fi
++
++	return 1
+ }
+-
++export -f _ae_root_mount
+ 
+ --- bin/ae_root_umount	2011-04-02 12:00:00.000000000 +0000
+ +++ bin/ae_root_umount	2026-04-02 08:15:00.000000000 +0000
+@@ -10,4 +10,6 @@
+ 	umount -l "${AE_DIR[CHROOT]}" &> /dev/null
+ 	# or umount -f ?
+ 	eend $?
++	# Cleanup OverlayFS workdir if it exists
++	[[ -d "${AE_DIR[RW]}.work" ]] && rm -rf "${AE_DIR[RW]}.work"
+ }
