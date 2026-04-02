@@ -1,0 +1,122 @@
+--- bin/ae_root_umount.orig	2015-04-02 11:00:00.000000000 +0000
++++ bin/ae_root_umount	2026-04-02 13:00:00.000000000 +0000
+@@ -14,19 +14,21 @@
+ # 	- unmount all AUFS/OverlayFS, transparent, binded and lost @ ${AE_DIR[ROOT]}
+ 
+ # get config
+-. /etc/async.emerge.conf
++source ae_functions || exit 1
++ae_load_config
+ 
+-einfo "Unmounting AUFS /+/var from ${AE_DIR[ROOT]}:"
++einfo "Unmounting OverlayFS from ${AE_PATHS_MERGED}:"
+ 
+ # unmounting all blockers (dbus --autolaunch, for example)
+-if [ "${AE_VCS[UNMOUNT_KILL_BLOCKERS]}" == "y" ]; then
++if [[ "${AE_VCS_UNMOUNT_KILL_BLOCKERS}" == "y" ]]; then
+ 	# def cmd for request blocker(s) in chrooted dirs
+-	#cmd="lsof 2>/dev/null | grep ${AE_DIR[CHROOT]} | cut -c11-16 | uniq"
+-	cmd="lsof -Fp +d ${AE_DIR[CHROOT]} 2>/dev/null | uniq"
++	cmd="lsof -t +D ${AE_PATHS_MERGED} 2>/dev/null"
+ 	s=$(eval $cmd)
+-	#echo "blockers pids: $s"
++
+ 	if [ "$s" ]; then
+ 		einfo "  Killing fs-blocking processes inside the merged view..."
+-		# loop to try to kill
+-		max_tries=${AE_VCS[UNMOUNT_KILL_BLOCKERS_MT]}
++		max_tries=${AE_VCS_UNMOUNT_KILL_BLOCKERS_MT:-5}
+ 		for ((i=1; $i <= $max_tries+2; i++)); do
+ 			[ "$s" ] || break
+-			# loop to get info about each blocker
+-			to_kill_pid="" 
+-			to_kill_name=""
+-			for t in $s; do
+-				to_kill_pid+=" ${t:1}"
+-				to_kill_name+=' '$(ps -p ${t:1} -o comm=)
+-			done
+ 			
++			# Modern 2026 signal escalation: INT -> TERM -> KILL
+ 			signal='-INT'
+-			(($i > 2*$max_tries/3)) && signal='-TERM'
+-			(($i > $max_tries)) && signal='-KILL'
++			((i > max_tries / 2)) && signal='-TERM'
++			((i > max_tries)) && signal='-KILL'
+ 
+-			einfo "    try $i of $(($max_tries+2)) to signaling $signal to:"$to_kill_name
+-			
+-			# send signal
+-			kill $signal $to_kill_pid &> /dev/null &
+-			# waiting for shutdown (in seconds)
+-			sleep ${AE_VCS[UNMOUNT_KILL_BLOCKERS_TO]}
+-			
+-			# find blockers again
++			kill $signal $s &> /dev/null
++			sleep ${AE_VCS_UNMOUNT_KILL_BLOCKERS_TO:-1}
+ 			s=$(eval $cmd)
+ 		done
+-		
+-		# check if there is no more blockers in lsof
+-		if [ "$s" ]; then
+-			eerror "  Can't kill some blockers: unmounting chrooted dirs is impossible. Stop."
+-			eend 1
+-		else
+-			einfo "  All blockers were killed."
+-			einfo "Unmounting AUFS /+/var from ${AE_DIR[ROOT]} (continued):"
+-		fi
+ 	fi
+ fi
+ 
+-# umount all for path $1 and type $2, let counter to $3
+-umnt_path_type(){
+-	local count=0
+-	for i in $(mount | grep "$1" | egrep "$2" | cut -f3 -d' ' | sort -r); do
+-		umount -lv "$i" &> /dev/null
+-		((count++))
+-	done
+-	[ "$3" ] && let "$3=$count"
+-	return $count
+-}
+-
+-
+ # remove temp swap file
+-if [[ "${AE_TMPFS[SIZE]}" && "${AE_TMPFS[PC]}" ]]; then # create 
++if [[ -f "${AE_TMPFS_SWAP_FILE}" ]]; then 
+ 	einfo "  Unlinking temporary extra swap file ..."
+-	swapoff "${AE_TMPFS[SWAP_FILE]}" && \
+-	rm -v "${AE_TMPFS[SWAP_FILE]}" >/dev/null && \
+-	eend 0 || eend 1
++	swapoff "${AE_TMPFS_SWAP_FILE}" 2>/dev/null
++	rm -f "${AE_TMPFS_SWAP_FILE}"
+ fi
+ 
+-# unmount everything
+-umnt_path_type "${AE_DIR[CHROOT]}" '(proc|sysfs|tmpfs)' 'lost' # unmount special
+-umnt_path_type "${AE_DIR[CHROOT]}" 'rw,bind' 'nonmerged' # unmount transparent
+-umnt_path_type "${AE_DIR[ROOT]}" 'aufs' 'unmounted' # unmount AUFS below ${AE_DIR[ROOT]}
+-umnt_path_type "${AE_DIR[ROOT]}" 'bind' 'unbinded' # unmount binded below ${AE_DIR[ROOT]}
+-
++# 2026: The "Lazy" and "Recursive" unmount strategy
++# We unmount the merged view first. Everything else (proc, dev) 
++# inside it should technically vanish, but we clean up the binds just in case.
++ebegin "Cleaning up OverlayFS layers"
++umount -R -l "${AE_PATHS_MERGED}" 2>/dev/null
++eend $?
+ 
+-# out status
+-if [ "$(mount | grep ${AE_DIR[ROOT]})" ]; then
+-	if (($unbinded+$nonmerged)); then
+-		eerror "  Unmounted and unbinded $unbinded dirs, +$nonmerged as transparent (non-merged) and $lost specials."
+-	fi
+-	eerror "  Can't unmount all AUFS mountpoints!"
+-	eend 2
+-	exit 1
+-fi
+-
+-if (($unbinded+$nonmerged)); then
+-	einfo "  Unmounted and unbinded $unbinded dirs, +$nonmerged as transparent (non-merged) and $lost specials."
+-else
+-	ewarn "  Not found any AUFS for unmounting."
+-fi
+-eend 0
+ exit 0
