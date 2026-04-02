@@ -1,0 +1,41 @@
+# async-emerge 2026 Configuration
+# Refined for Kernel 6.x/7.x & Unified Backends
+
+[paths]
+root = "/"
+upper = "/var/tmp/async-emerge/upper"
+mount = "/var/tmp/async-emerge/mnt"
+log   = "/var/log/async-emerge.log"
+
+[strategy]
+# Options: "auto", "aufs", "overlay"
+backend = "auto"
+sync_on_success = true
+purge_on_success = true
+
+[aufs]
+# Modern AUFS 6.x+ options
+si_prefix = "ae_sandbox"
+nohino    = true
+udba      = "notify"
+verbose   = false
+
+[overlay]
+# Modern OverlayFS options
+workdir   = "/var/tmp/async-emerge/work"
+volatile  = true
+xino      = "off"
+redirect  = "off"
+uuid      = "off"
+
+[portage]
+# Standard emerge flags for background builds
+args = ["--buildpkg", "--usepkg", "--quiet-build=y"]
+features = ["parallel-fetch", "ccache"]
+
+[virtfs]
+# Systems to bind-mount into the sandbox
+mount_proc = true
+mount_sys  = true
+mount_dev  = true
+mount_run  = true
